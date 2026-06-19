@@ -116,11 +116,29 @@ def plot_time_domain(
 def compute_fft(
     signal: np.ndarray,
     fs: float,
+    window: str = "hann",
+    nfft: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     n = len(signal)
-    freqs = np.fft.rfftfreq(n, d=1.0 / fs)
-    fft_vals = np.fft.rfft(signal)
-    magnitude = np.abs(fft_vals) / n
+    if nfft is None:
+        nfft = n
+
+    if window == "hann":
+        win = 0.5 * (1.0 - np.cos(2.0 * np.pi * np.arange(n) / (n - 1)))
+    elif window == "hamming":
+        win = 0.54 - 0.46 * np.cos(2.0 * np.pi * np.arange(n) / (n - 1))
+    elif window == "none" or window is None:
+        win = np.ones(n)
+    else:
+        raise ValueError(f"Unknown window type: {window}")
+
+    win_gain = np.mean(win)
+    windowed = signal * win
+
+    fft_vals = np.fft.rfft(windowed, n=nfft)
+    freqs = np.fft.rfftfreq(nfft, d=1.0 / fs)
+
+    magnitude = np.abs(fft_vals) / (n * win_gain)
     magnitude[1:] = magnitude[1:] * 2
     return freqs, magnitude
 
@@ -269,8 +287,33 @@ def fir_lowpass(
 def apply_filter(
     signal: np.ndarray,
     b: np.ndarray,
+    zero_phase: bool = False,
 ) -> np.ndarray:
-    return np.convolve(signal, b, mode="same")
+    if zero_phase:
+        return _filtfilt(signal, b)
+    else:
+        return np.convolve(signal, b, mode="same")
+
+
+def _filtfilt(signal: np.ndarray, b: np.ndarray) -> np.ndarray:
+    n = len(signal)
+    order = len(b) - 1
+    pad_len = order * 3
+
+    if n <= pad_len:
+        pad_len = n // 2
+
+    pre_pad = 2.0 * signal[0] - signal[pad_len:0:-1] if pad_len > 0 else np.array([])
+    post_pad = 2.0 * signal[-1] - signal[-2:-pad_len-2:-1] if pad_len > 0 else np.array([])
+
+    padded = np.concatenate([pre_pad, signal, post_pad])
+
+    y_forward = np.convolve(padded, b, mode="same")
+    y_backward = np.convolve(y_forward[::-1], b, mode="same")
+    y = y_backward[::-1]
+
+    result = y[pad_len:pad_len + n]
+    return result
 
 
 def plot_filter_compare_time(
